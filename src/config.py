@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     gemini_models_text: str = "gemini-flash-lite-latest"
     gemini_models_vision: str = "gemini-flash-latest,gemini-flash-lite-latest"
 
+    # How often to refresh the inventory context snapshot (seconds).
+    # This only calls InvenTree's local API — no AI quota used.
+    context_refresh_interval: int = 300
+
     # Conversation context budget (tokens). History is compacted to stay within this.
     context_budget: int = 32_000
     # Hot compaction: triggered in-chat when history exceeds this fraction of budget.

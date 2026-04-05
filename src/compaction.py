@@ -7,11 +7,12 @@ spending tokens (plentiful) instead of API rounds (scarce).
 
 Context is refreshed:
 - Once on startup
+- Periodically (every 5 min by default) — this is free, just InvenTree API calls
 - After any inventory write operation (create/update/move)
 - After a conversation compaction event
-NOT on a periodic timer (that would waste daily request quota).
 """
 
+import asyncio
 import logging
 import shutil
 from datetime import datetime, timezone
@@ -89,7 +90,7 @@ async def _build_context() -> str:
         parent_info = f" (under #{loc['parent']})" if loc.get("parent") else ""
         lines.append(f"  #{loc['pk']}: {loc['name']}{parent_info}")
 
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 async def refresh_context() -> None:
@@ -97,3 +98,13 @@ async def refresh_context() -> None:
     context = await _build_context()
     CONTEXT_FILE.write_text(context, encoding="utf-8")
     logger.info("Context refreshed (%d bytes)", len(context))
+
+
+async def context_refresh_loop() -> None:
+    """Periodically refresh the inventory context snapshot.
+
+    This only calls InvenTree's REST API (local network, no AI quota used).
+    """
+    while True:
+        await asyncio.sleep(settings.context_refresh_interval)
+        await refresh_context()

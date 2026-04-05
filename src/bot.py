@@ -9,7 +9,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 from config import settings
 from agent import chat, request_log
-from compaction import init_data_dir, refresh_context
+from compaction import init_data_dir, refresh_context, context_refresh_loop
 from session import clear_session, get_session, idle_compaction_loop
 
 logging.basicConfig(
@@ -141,6 +141,7 @@ async def post_init(application: Application) -> None:
     # Seed data/ from sample-data/ if needed, then build initial context
     init_data_dir()
     await refresh_context()
+    asyncio.create_task(context_refresh_loop())
     asyncio.create_task(idle_compaction_loop())
 
 
