@@ -7,6 +7,7 @@ Falls back through a configurable list of models on rate-limit (429) errors.
 import asyncio
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from google import genai
@@ -14,6 +15,7 @@ from google.genai import types
 from google.genai.errors import ClientError
 
 from config import settings
+from compaction import get_context
 import inventree_client as inv
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,8 @@ client = genai.Client(api_key=settings.gemini_api_key)
 
 # In-memory request log for /status command (reset on restart)
 request_log: list[dict] = []
+
+PROMPT_FILE = Path(__file__).parent / "prompt.txt"
 
 # Define the tools Gemini can call
 TOOLS = [
@@ -170,32 +174,11 @@ TOOLS = [
     )
 ]
 
-SYSTEM_PROMPT = """\
-You are a helpful home inventory assistant. You manage a personal InvenTree inventory \
-system that tracks items in a house — where things are stored, how many there are, etc.
-
-Your capabilities:
-- Search for items and tell the user where they are
-- Add new items to the inventory
-- Move items between locations
-- Suggest where to put new items based on existing categories and locations
-- Provide inventory summaries and reports
-
-IMPORTANT — efficiency rules:
-- Call multiple functions in parallel whenever possible (e.g. create two categories in one round).
-- Answer general questions about InvenTree from your own knowledge — do NOT call functions just to explore.
-- InvenTree supports nested sub-categories and sub-locations. You know this; no need to verify.
-- Limit yourself to at most 3 rounds of function calls. After gathering info, compose your final answer.
-- When the user's intent is clear (e.g. "create category X"), just do it and report the result. \
-Only ask for confirmation when the request is genuinely ambiguous.
-
-When the user sends a photo of an item:
-1. Identify what the item is
-2. Search the inventory to see if it already exists
-3. If asking "where to put this", look at existing categories and locations for similar items and suggest the best placement
-
-Be concise and friendly. Respond in the same language the user writes in.
-"""
+def _build_system_prompt() -> str:
+    """Assemble system prompt from prompt.txt + live context snapshot."""
+    prompt = PROMPT_FILE.read_text(encoding="utf-8")
+    context = get_context()
+    return f"{prompt}\n\n--- INVENTORY CONTEXT ---\n{context}"
 
 # Map function names to actual callables
 FUNCTION_MAP: dict[str, Any] = {
@@ -255,7 +238,7 @@ async def _generate_with_fallback(
                     model=model,
                     contents=contents,
                     config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
+                        system_instruction=_build_system_prompt(),
                         tools=TOOLS,
                         temperature=0.3,
                     ),

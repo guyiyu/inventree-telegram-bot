@@ -1,5 +1,6 @@
 """Telegram bot entrypoint — receives messages and photos, routes to the Gemini agent."""
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -8,6 +9,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 from config import settings
 from agent import chat, request_log
+from compaction import compaction_loop, refresh_context
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -113,12 +115,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def post_init(application: Application) -> None:
-    """Register bot commands so they show in Telegram's command menu."""
+    """Register bot commands and start background compaction."""
     await application.bot.set_my_commands([
         BotCommand("start", "Show welcome message"),
         BotCommand("status", "Show API usage and model info"),
         BotCommand("user_id", "Show your Telegram user ID"),
     ])
+    # Initial context build + start periodic refresh
+    await refresh_context()
+    asyncio.create_task(compaction_loop())
 
 
 def main() -> None:

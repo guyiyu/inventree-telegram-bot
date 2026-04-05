@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     gemini_models_text: str = "gemini-flash-lite-latest"
     gemini_models_vision: str = "gemini-flash-latest,gemini-flash-lite-latest"
 
+    # How often to refresh the inventory context snapshot (seconds)
+    compaction_interval: int = 300
+
     @property
     def allowed_users(self) -> set[int]:
         if not self.allowed_user_ids:
