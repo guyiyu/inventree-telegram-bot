@@ -21,6 +21,13 @@ def _is_authorized(user_id: int) -> bool:
     return user_id in settings.allowed_users
 
 
+async def user_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid = update.effective_user.id
+    authorized = _is_authorized(uid)
+    status = "ALLOWED" if authorized else "NOT ALLOWED"
+    await update.message.reply_text(f"Your user ID: `{uid}`\nStatus: {status}", parse_mode="Markdown")
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update.effective_user.id):
         await update.message.reply_text("Unauthorized.")
@@ -80,6 +87,7 @@ def main() -> None:
     app = Application.builder().token(settings.telegram_bot_token).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("user_id", user_id))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
