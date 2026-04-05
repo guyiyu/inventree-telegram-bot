@@ -1,0 +1,17 @@
+services:
+  bot:
+    build: .
+    container_name: inventree-telegram-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - inventree
+
+networks:
+  inventree:
+    # The external network where your InvenTree containers run.
+    # By default this is "inventree_default" from InvenTree's docker-compose.
+    # Adjust the name if your setup differs.
+    name: ${INVENTREE_NETWORK:-inventree_default}
+    external: true
