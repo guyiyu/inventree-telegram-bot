@@ -1,11 +1,11 @@
 """Gemini-powered agent that interprets user intent and calls InvenTree APIs.
 
 Supports text and image inputs. Uses function-calling to interact with InvenTree.
+Falls back through a configurable list of models on rate-limit (429) errors.
 """
 
 import asyncio
 import logging
-import re
 from typing import Any
 
 from google import genai
@@ -18,8 +18,6 @@ import inventree_client as inv
 logger = logging.getLogger(__name__)
 
 client = genai.Client(api_key=settings.gemini_api_key)
-MODEL_TEXT = "gemini-3.1-flash-lite-preview"  # 500 RPD free tier, good for text queries
-MODEL_VISION = "gemini-2.5-flash"             # 20 RPD free tier, better for photo recognition
 
 # Define the tools Gemini can call
 TOOLS = [
@@ -227,11 +225,40 @@ async def _execute_function_call(fn_call: types.FunctionCall) -> Any:
         return {"error": str(e)}
 
 
+async def _generate_with_fallback(
+    models: list[str],
+    contents: list[types.Content],
+) -> types.GenerateContentResponse:
+    """Try each model in the fallback list. On 429, try the next one."""
+    last_error = None
+    for model in models:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    tools=TOOLS,
+                    temperature=0.3,
+                ),
+            )
+            logger.info("Success with model: %s", model)
+            return response
+        except ClientError as e:
+            if e.status_code == 429:
+                logger.warning("Rate limited on %s, trying next model...", model)
+                last_error = e
+                continue
+            raise
+    raise last_error
+
+
 async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: str = "image/jpeg") -> str:
     """Process a user message (with optional image) and return the assistant's response.
 
     This handles multi-turn function calling: Gemini may call one or more functions,
-    and we loop until it produces a final text response.
+    and we loop until it produces a final text response. On 429, falls back to the
+    next model in the configured list.
     """
     # Build the user content parts
     parts: list[types.Part] = []
@@ -243,21 +270,13 @@ async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: s
         types.Content(role="user", parts=parts),
     ]
 
-    model = MODEL_VISION if image_bytes else MODEL_TEXT
-    logger.info("Using model: %s", model)
+    models = settings.vision_models if image_bytes else settings.text_models
+    logger.info("Model fallback chain: %s", models)
 
     # Loop: send to Gemini, execute any function calls, feed results back
     max_rounds = 10
     for _ in range(max_rounds):
-        response = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                tools=TOOLS,
-                temperature=0.3,
-            ),
-        )
+        response = await _generate_with_fallback(models, contents)
 
         candidate = response.candidates[0]
         content = candidate.content
