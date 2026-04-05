@@ -3,12 +3,14 @@
 Supports text and image inputs. Uses function-calling to interact with InvenTree.
 """
 
-import json
+import asyncio
 import logging
+import re
 from typing import Any
 
 from google import genai
 from google.genai import types
+from google.genai.errors import ClientError
 
 from config import settings
 import inventree_client as inv
@@ -16,7 +18,8 @@ import inventree_client as inv
 logger = logging.getLogger(__name__)
 
 client = genai.Client(api_key=settings.gemini_api_key)
-MODEL = "gemini-2.0-flash"
+MODEL_TEXT = "gemini-3.1-flash-lite-preview"  # 500 RPD free tier, good for text queries
+MODEL_VISION = "gemini-2.5-flash"             # 20 RPD free tier, better for photo recognition
 
 # Define the tools Gemini can call
 TOOLS = [
@@ -240,11 +243,14 @@ async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: s
         types.Content(role="user", parts=parts),
     ]
 
+    model = MODEL_VISION if image_bytes else MODEL_TEXT
+    logger.info("Using model: %s", model)
+
     # Loop: send to Gemini, execute any function calls, feed results back
     max_rounds = 10
     for _ in range(max_rounds):
         response = client.models.generate_content(
-            model=MODEL,
+            model=model,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
