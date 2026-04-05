@@ -10,8 +10,8 @@ class Settings(BaseSettings):
 
     # Comma-separated model fallback lists. First model is tried first;
     # if rate-limited (429), the next model in the list is used.
-    gemini_models_text: str = "gemini-3.1-flash-lite-preview,gemini-2.5-flash-lite,gemini-2.5-flash"
-    gemini_models_vision: str = "gemini-2.5-flash,gemini-3.1-flash-lite-preview"
+    gemini_models_text: str = "gemini-flash-lite-latest"
+    gemini_models_vision: str = "gemini-flash-latest,gemini-flash-lite-latest"
 
     @property
     def allowed_users(self) -> set[int]:
