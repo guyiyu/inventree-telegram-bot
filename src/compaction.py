@@ -1,13 +1,19 @@
-"""Periodic compaction of inventory state into a context summary.
+"""Inventory context snapshot for the system prompt.
 
 Fetches categories, locations, and stock counts from InvenTree and writes
-a human-readable snapshot to context.txt. This is injected into the system
-prompt so the model starts each conversation with a warm cache — spending
-tokens (plentiful) instead of API rounds (scarce).
+a human-readable snapshot to data/context.txt. This is injected into the
+system prompt so the model starts each conversation with a warm cache —
+spending tokens (plentiful) instead of API rounds (scarce).
+
+Context is refreshed:
+- Once on startup
+- After any inventory write operation (create/update/move)
+- After a conversation compaction event
+NOT on a periodic timer (that would waste daily request quota).
 """
 
-import asyncio
 import logging
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,7 +23,28 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-CONTEXT_FILE = Path(__file__).parent / "context.txt"
+DATA_DIR = Path(__file__).parent.parent / "data"
+SAMPLE_DIR = Path(__file__).parent.parent / "sample-data"
+CONTEXT_FILE = DATA_DIR / "context.txt"
+PROMPT_FILE = DATA_DIR / "prompt.txt"
+
+
+def init_data_dir() -> None:
+    """Ensure data/ exists and seed missing files from sample-data/."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if SAMPLE_DIR.exists():
+        for sample_file in SAMPLE_DIR.iterdir():
+            target = DATA_DIR / sample_file.name
+            if not target.exists():
+                shutil.copy2(sample_file, target)
+                logger.info("Seeded %s from sample-data/", sample_file.name)
+
+
+def get_prompt() -> str:
+    """Read the system prompt from data/prompt.txt."""
+    if PROMPT_FILE.exists():
+        return PROMPT_FILE.read_text(encoding="utf-8")
+    return "You are a helpful home inventory assistant."
 
 
 def get_context() -> str:
@@ -38,6 +65,8 @@ async def _build_context() -> str:
         return get_context()  # keep the old one
 
     lines = [
+        f"SITE_URL: {settings.inventree_site_url}",
+        "",
         f"Inventory snapshot (UTC {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}):",
         f"  Total parts: {summary.get('total_parts', '?')}",
         f"  Total stock items: {summary.get('total_stock_items', '?')}",
@@ -67,11 +96,4 @@ async def refresh_context() -> None:
     """Rebuild and save the context snapshot."""
     context = await _build_context()
     CONTEXT_FILE.write_text(context, encoding="utf-8")
-    logger.info("Context compacted (%d bytes)", len(context))
-
-
-async def compaction_loop() -> None:
-    """Run in the background, refreshing context periodically."""
-    while True:
-        await refresh_context()
-        await asyncio.sleep(settings.compaction_interval)
+    logger.info("Context refreshed (%d bytes)", len(context))

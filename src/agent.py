@@ -7,7 +7,6 @@ Falls back through a configurable list of models on rate-limit (429) errors.
 import asyncio
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from google import genai
@@ -15,7 +14,8 @@ from google.genai import types
 from google.genai.errors import ClientError
 
 from config import settings
-from compaction import get_context
+from compaction import get_context, get_prompt, refresh_context
+from session import get_session
 import inventree_client as inv
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,11 @@ client = genai.Client(api_key=settings.gemini_api_key)
 # In-memory request log for /status command (reset on restart)
 request_log: list[dict] = []
 
-PROMPT_FILE = Path(__file__).parent / "prompt.txt"
+# Functions that modify inventory state — context should be refreshed after these
+WRITE_FUNCTIONS = {
+    "create_part", "create_stock_item", "update_stock_quantity",
+    "move_stock", "create_location", "create_category",
+}
 
 # Define the tools Gemini can call
 TOOLS = [
@@ -174,11 +178,17 @@ TOOLS = [
     )
 ]
 
-def _build_system_prompt() -> str:
-    """Assemble system prompt from prompt.txt + live context snapshot."""
-    prompt = PROMPT_FILE.read_text(encoding="utf-8")
+def _build_system_prompt(user_id: int) -> str:
+    """Assemble system prompt from data/prompt.txt + inventory context + per-user summary."""
+    prompt = get_prompt()
     context = get_context()
-    return f"{prompt}\n\n--- INVENTORY CONTEXT ---\n{context}"
+    parts = [prompt, f"\n--- INVENTORY CONTEXT ---\n{context}"]
+
+    session = get_session(user_id)
+    if session.summary:
+        parts.append(f"\n--- CONVERSATION CONTEXT ---\n{session.summary}")
+
+    return "\n".join(parts)
 
 # Map function names to actual callables
 FUNCTION_MAP: dict[str, Any] = {
@@ -198,7 +208,10 @@ FUNCTION_MAP: dict[str, Any] = {
 
 
 async def _execute_function_call(fn_call: types.FunctionCall) -> Any:
-    """Execute a function call from Gemini and return the result."""
+    """Execute a function call from Gemini and return the result.
+
+    After write operations, refreshes the inventory context snapshot.
+    """
     fn_name = fn_call.name
     fn_args = dict(fn_call.args) if fn_call.args else {}
     logger.info("Calling %s(%s)", fn_name, fn_args)
@@ -209,6 +222,8 @@ async def _execute_function_call(fn_call: types.FunctionCall) -> Any:
 
     try:
         result = await fn(**fn_args)
+        if fn_name in WRITE_FUNCTIONS:
+            await refresh_context()
         return result
     except Exception as e:
         logger.exception("Error calling %s", fn_name)
@@ -218,6 +233,7 @@ async def _execute_function_call(fn_call: types.FunctionCall) -> Any:
 async def _generate_with_fallback(
     models: list[str],
     contents: list[types.Content],
+    user_id: int,
     preferred_model: str | None = None,
 ) -> tuple[types.GenerateContentResponse, str]:
     """Try each model in the fallback list. On 429, wait briefly then try next.
@@ -238,7 +254,7 @@ async def _generate_with_fallback(
                     model=model,
                     contents=contents,
                     config=types.GenerateContentConfig(
-                        system_instruction=_build_system_prompt(),
+                        system_instruction=_build_system_prompt(user_id),
                         tools=TOOLS,
                         temperature=0.3,
                     ),
@@ -262,22 +278,33 @@ async def _generate_with_fallback(
     raise last_error
 
 
-async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: str = "image/jpeg") -> tuple[str, str]:
+async def chat(user_id: int, user_message: str, image_bytes: bytes | None = None, mime_type: str = "image/jpeg") -> tuple[str, str]:
     """Process a user message (with optional image) and return (reply_text, model_used).
 
-    This handles multi-turn function calling: Gemini may call one or more functions,
-    and we loop until it produces a final text response. On 429, waits and retries
-    or falls back to the next model in the configured list.
+    Maintains per-user conversation history. On each call:
+    1. Append the user message to the session
+    2. Check if hot compaction is needed (90% of budget)
+    3. Send full history to Gemini with function-calling loop
+    4. Append all model/function-result messages to the session
     """
+    session = get_session(user_id)
+
     # Build the user content parts
     parts: list[types.Part] = []
     if image_bytes:
         parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
     parts.append(types.Part.from_text(text=user_message))
 
-    contents: list[types.Content] = [
-        types.Content(role="user", parts=parts),
-    ]
+    user_content = types.Content(role="user", parts=parts)
+    session.add_message(user_content)
+
+    # Hot compaction: if we're at 90% budget, compact before sending
+    if session.needs_hot_compaction():
+        logger.info(
+            "Hot compaction for user %s (%d tokens, budget %d)",
+            user_id, session.token_estimate, settings.context_budget,
+        )
+        await session.compact(keep_raw=settings.hot_compaction_keep_raw)
 
     models = settings.vision_models if image_bytes else settings.text_models
     logger.info("Model fallback chain: %s", models)
@@ -288,7 +315,8 @@ async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: s
     max_rounds = 5
     for round_num in range(max_rounds):
         response, used_model = await _generate_with_fallback(
-            models, contents, preferred_model=used_model if round_num > 0 else None
+            models, session.messages, user_id,
+            preferred_model=used_model if round_num > 0 else None,
         )
 
         candidate = response.candidates[0]
@@ -298,13 +326,14 @@ async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: s
         fn_calls = [part.function_call for part in content.parts if part.function_call]
 
         if not fn_calls:
-            # Final text response
+            # Final text response — add to session and return
+            session.add_message(content)
             text_parts = [part.text for part in content.parts if part.text]
             reply = "\n".join(text_parts) if text_parts else "I couldn't process that request."
             return reply, used_model
 
         # Execute all function calls
-        contents.append(content)  # add the model's response with function calls
+        session.add_message(content)
 
         fn_response_parts: list[types.Part] = []
         for fn_call in fn_calls:
@@ -316,6 +345,7 @@ async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: s
                 )
             )
 
-        contents.append(types.Content(role="user", parts=fn_response_parts))
+        fn_results_content = types.Content(role="user", parts=fn_response_parts)
+        session.add_message(fn_results_content)
 
     return "I ran into a loop trying to process your request. Please try rephrasing.", used_model

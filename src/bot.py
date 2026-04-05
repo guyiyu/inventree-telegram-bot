@@ -9,7 +9,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 from config import settings
 from agent import chat, request_log
-from compaction import compaction_loop, refresh_context
+from compaction import init_data_dir, refresh_context
+from session import clear_session, get_session, idle_compaction_loop
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -73,7 +74,20 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     lines.append(f"\nText chain: {', '.join(settings.text_models)}")
     lines.append(f"Vision chain: {', '.join(settings.vision_models)}")
 
+    # Session info
+    session = get_session(update.effective_user.id)
+    lines.append(f"\nSession: {len(session.messages)} messages, ~{session.token_estimate} tokens")
+    lines.append(f"Budget: {settings.context_budget} tokens")
+
     await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clear the user's conversation history."""
+    if not _is_authorized(update.effective_user.id):
+        return
+    clear_session(update.effective_user.id)
+    await update.message.reply_text("Conversation history cleared.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -87,7 +101,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.chat.send_action("typing")
 
     try:
-        reply, _model = await chat(user_text)
+        reply, _model = await chat(update.effective_user.id, user_text)
         await update.message.reply_text(reply)
     except Exception:
         logger.exception("Error processing message")
@@ -107,7 +121,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         file = await context.bot.get_file(photo.file_id)
         image_bytes = await file.download_as_bytearray()
 
-        reply, _model = await chat(caption, image_bytes=bytes(image_bytes), mime_type="image/jpeg")
+        reply, _model = await chat(update.effective_user.id, caption, image_bytes=bytes(image_bytes), mime_type="image/jpeg")
         await update.message.reply_text(reply)
     except Exception:
         logger.exception("Error processing photo")
@@ -115,15 +129,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def post_init(application: Application) -> None:
-    """Register bot commands and start background compaction."""
+    """Register bot commands, seed data dir, and start background tasks."""
     await application.bot.set_my_commands([
         BotCommand("start", "Show welcome message"),
-        BotCommand("status", "Show API usage and model info"),
+        BotCommand("status", "Show API usage and session info"),
+        BotCommand("clear", "Clear conversation history"),
         BotCommand("user_id", "Show your Telegram user ID"),
     ])
-    # Initial context build + start periodic refresh
+    # Seed data/ from sample-data/ if needed, then build initial context
+    init_data_dir()
     await refresh_context()
-    asyncio.create_task(compaction_loop())
+    asyncio.create_task(idle_compaction_loop())
 
 
 def main() -> None:
@@ -131,6 +147,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(CommandHandler("user_id", cmd_user_id))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
