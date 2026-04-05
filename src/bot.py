@@ -1,12 +1,13 @@
 """Telegram bot entrypoint — receives messages and photos, routes to the Gemini agent."""
 
 import logging
+from datetime import datetime, timezone
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from config import settings
-from agent import chat
+from agent import chat, request_log
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -21,14 +22,14 @@ def _is_authorized(user_id: int) -> bool:
     return user_id in settings.allowed_users
 
 
-async def user_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid = update.effective_user.id
     authorized = _is_authorized(uid)
     status = "ALLOWED" if authorized else "NOT ALLOWED"
-    await update.message.reply_text(f"Your user ID: `{uid}`\nStatus: {status}", parse_mode="Markdown")
+    await update.message.reply_text(f"Your user ID: {uid}\nStatus: {status}")
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update.effective_user.id):
         await update.message.reply_text("Unauthorized.")
         return
@@ -44,6 +45,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update.effective_user.id):
+        return
+
+    lines = ["Model usage today:"]
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    if not request_log:
+        lines.append("  No requests yet.")
+    else:
+        # Count requests per model for today
+        counts: dict[str, int] = {}
+        for entry in request_log:
+            if entry["date"] == today:
+                model = entry["model"]
+                counts[model] = counts.get(model, 0) + 1
+
+        if not counts:
+            lines.append("  No requests today.")
+        else:
+            for model, count in sorted(counts.items()):
+                lines.append(f"  {model}: {count}")
+
+    lines.append(f"\nText chain: {', '.join(settings.text_models)}")
+    lines.append(f"Vision chain: {', '.join(settings.vision_models)}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update.effective_user.id):
         return
@@ -55,8 +85,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.chat.send_action("typing")
 
     try:
-        reply = await chat(user_text)
-        await update.message.reply_text(reply, parse_mode="Markdown")
+        reply, _model = await chat(user_text)
+        await update.message.reply_text(reply)
     except Exception:
         logger.exception("Error processing message")
         await update.message.reply_text("Sorry, something went wrong. Please try again.")
@@ -71,23 +101,32 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.chat.send_action("typing")
 
     try:
-        # Download the largest available photo
         photo = update.message.photo[-1]
         file = await context.bot.get_file(photo.file_id)
         image_bytes = await file.download_as_bytearray()
 
-        reply = await chat(caption, image_bytes=bytes(image_bytes), mime_type="image/jpeg")
-        await update.message.reply_text(reply, parse_mode="Markdown")
+        reply, _model = await chat(caption, image_bytes=bytes(image_bytes), mime_type="image/jpeg")
+        await update.message.reply_text(reply)
     except Exception:
         logger.exception("Error processing photo")
         await update.message.reply_text("Sorry, I couldn't process that photo. Please try again.")
 
 
-def main() -> None:
-    app = Application.builder().token(settings.telegram_bot_token).build()
+async def post_init(application: Application) -> None:
+    """Register bot commands so they show in Telegram's command menu."""
+    await application.bot.set_my_commands([
+        BotCommand("start", "Show welcome message"),
+        BotCommand("status", "Show API usage and model info"),
+        BotCommand("user_id", "Show your Telegram user ID"),
+    ])
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("user_id", user_id))
+
+def main() -> None:
+    app = Application.builder().token(settings.telegram_bot_token).post_init(post_init).build()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("user_id", cmd_user_id))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

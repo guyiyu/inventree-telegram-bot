@@ -6,6 +6,7 @@ Falls back through a configurable list of models on rate-limit (429) errors.
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from google import genai
@@ -18,6 +19,9 @@ import inventree_client as inv
 logger = logging.getLogger(__name__)
 
 client = genai.Client(api_key=settings.gemini_api_key)
+
+# In-memory request log for /status command (reset on restart)
+request_log: list[dict] = []
 
 # Define the tools Gemini can call
 TOOLS = [
@@ -177,17 +181,20 @@ Your capabilities:
 - Suggest where to put new items based on existing categories and locations
 - Provide inventory summaries and reports
 
+IMPORTANT — efficiency rules:
+- Call multiple functions in parallel whenever possible (e.g. create two categories in one round).
+- Answer general questions about InvenTree from your own knowledge — do NOT call functions just to explore.
+- InvenTree supports nested sub-categories and sub-locations. You know this; no need to verify.
+- Limit yourself to at most 3 rounds of function calls. After gathering info, compose your final answer.
+- When the user's intent is clear (e.g. "create category X"), just do it and report the result. \
+Only ask for confirmation when the request is genuinely ambiguous.
+
 When the user sends a photo of an item:
 1. Identify what the item is
 2. Search the inventory to see if it already exists
 3. If asking "where to put this", look at existing categories and locations for similar items and suggest the best placement
 
-Be concise and friendly. Use the available functions to interact with the inventory. \
-If you need multiple pieces of information, call multiple functions. \
-Always confirm before creating or modifying items — tell the user what you plan to do and ask for confirmation, \
-unless the user's intent is very clear and unambiguous.
-
-Respond in the same language the user writes in.
+Be concise and friendly. Respond in the same language the user writes in.
 """
 
 # Map function names to actual callables
@@ -228,37 +235,56 @@ async def _execute_function_call(fn_call: types.FunctionCall) -> Any:
 async def _generate_with_fallback(
     models: list[str],
     contents: list[types.Content],
-) -> types.GenerateContentResponse:
-    """Try each model in the fallback list. On 429, try the next one."""
+    preferred_model: str | None = None,
+) -> tuple[types.GenerateContentResponse, str]:
+    """Try each model in the fallback list. On 429, wait briefly then try next.
+    If preferred_model is set (mid-conversation), try it first with a retry.
+    Returns (response, model_name)."""
+    # If we're mid-conversation, prioritize the model we started with
+    order = list(models)
+    if preferred_model and preferred_model in order:
+        order.remove(preferred_model)
+        order.insert(0, preferred_model)
+
     last_error = None
-    for model in models:
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    tools=TOOLS,
-                    temperature=0.3,
-                ),
-            )
-            logger.info("Success with model: %s", model)
-            return response
-        except ClientError as e:
-            if e.status_code == 429:
-                logger.warning("Rate limited on %s, trying next model...", model)
-                last_error = e
-                continue
-            raise
+    for model in order:
+        # Try up to 2 attempts per model (with a wait on 429)
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        tools=TOOLS,
+                        temperature=0.3,
+                    ),
+                )
+                logger.info("Success with model: %s", model)
+                request_log.append({
+                    "model": model,
+                    "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                })
+                return response, model
+            except ClientError as e:
+                if e.status_code == 429:
+                    last_error = e
+                    if attempt == 0:
+                        logger.warning("Rate limited on %s, waiting 15s before retry...", model)
+                        await asyncio.sleep(15)
+                    else:
+                        logger.warning("Rate limited on %s again, trying next model...", model)
+                    continue
+                raise
     raise last_error
 
 
-async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: str = "image/jpeg") -> str:
-    """Process a user message (with optional image) and return the assistant's response.
+async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: str = "image/jpeg") -> tuple[str, str]:
+    """Process a user message (with optional image) and return (reply_text, model_used).
 
     This handles multi-turn function calling: Gemini may call one or more functions,
-    and we loop until it produces a final text response. On 429, falls back to the
-    next model in the configured list.
+    and we loop until it produces a final text response. On 429, waits and retries
+    or falls back to the next model in the configured list.
     """
     # Build the user content parts
     parts: list[types.Part] = []
@@ -273,10 +299,14 @@ async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: s
     models = settings.vision_models if image_bytes else settings.text_models
     logger.info("Model fallback chain: %s", models)
 
+    used_model = models[0]
+
     # Loop: send to Gemini, execute any function calls, feed results back
-    max_rounds = 10
-    for _ in range(max_rounds):
-        response = await _generate_with_fallback(models, contents)
+    max_rounds = 5
+    for round_num in range(max_rounds):
+        response, used_model = await _generate_with_fallback(
+            models, contents, preferred_model=used_model if round_num > 0 else None
+        )
 
         candidate = response.candidates[0]
         content = candidate.content
@@ -287,7 +317,8 @@ async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: s
         if not fn_calls:
             # Final text response
             text_parts = [part.text for part in content.parts if part.text]
-            return "\n".join(text_parts) if text_parts else "I couldn't process that request."
+            reply = "\n".join(text_parts) if text_parts else "I couldn't process that request."
+            return reply, used_model
 
         # Execute all function calls
         contents.append(content)  # add the model's response with function calls
@@ -304,4 +335,4 @@ async def chat(user_message: str, image_bytes: bytes | None = None, mime_type: s
 
         contents.append(types.Content(role="user", parts=fn_response_parts))
 
-    return "I ran into a loop trying to process your request. Please try rephrasing."
+    return "I ran into a loop trying to process your request. Please try rephrasing.", used_model
