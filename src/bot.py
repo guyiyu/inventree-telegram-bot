@@ -100,14 +100,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user_text.strip():
         return
 
-    await update.message.chat.send_action("typing")
+    thinking_msg = await update.message.reply_text("Thinking...")
 
     try:
         reply, _model = await chat(update.effective_user.id, user_text)
-        await update.message.reply_text(reply)
+        await thinking_msg.edit_text(reply)
     except Exception:
         logger.exception("Error processing message")
-        await update.message.reply_text("Sorry, something went wrong. Please try again.")
+        await thinking_msg.edit_text("Sorry, something went wrong. Please try again.")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -116,7 +116,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     caption = update.message.caption or "What is this item? Do I already have it in my inventory? Where should I put it?"
 
-    await update.message.chat.send_action("typing")
+    thinking_msg = await update.message.reply_text("Thinking...")
 
     try:
         photo = update.message.photo[-1]
@@ -124,10 +124,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         image_bytes = await file.download_as_bytearray()
 
         reply, _model = await chat(update.effective_user.id, caption, image_bytes=bytes(image_bytes), mime_type="image/jpeg")
-        await update.message.reply_text(reply)
+        await thinking_msg.edit_text(reply)
     except Exception:
         logger.exception("Error processing photo")
-        await update.message.reply_text("Sorry, I couldn't process that photo. Please try again.")
+        await thinking_msg.edit_text("Sorry, I couldn't process that photo. Please try again.")
 
 
 async def post_init(application: Application) -> None:
