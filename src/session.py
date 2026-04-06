@@ -152,7 +152,7 @@ class ConversationSession:
 
         serialized_messages = []
         for msg in self.messages:
-            dumped = msg.model_dump(exclude_none=True)
+            dumped = msg.model_dump(mode="json", exclude_none=True)
             # Strip inline_data (images) to keep the file small
             if "parts" in dumped:
                 for part in dumped["parts"]:
