@@ -36,12 +36,14 @@ Telegram <-> Bot (python-telegram-bot)
 ```
 .
 ├── sample-data/
-│   └── prompt.txt          # System prompt template (seeded to data/ on first run)
-├── data/                   # Runtime data (gitignored, volume-mounted)
-│   ├── prompt.txt          # Active system prompt (editable without rebuild)
-│   ├── context.txt         # Inventory snapshot (auto-refreshed)
-│   └── sessions/           # Per-user conversation summaries
-│       └── {user_id}.txt
+│   ├── prompt.txt              # Base system prompt (seeded to data/ on first run)
+│   └── prompt-site-example.txt # Example site-specific prompt extension
+├── data/                       # Runtime data (gitignored, volume-mounted)
+│   ├── prompt.txt              # Active base prompt (editable without rebuild)
+│   ├── prompt-*.txt            # Site-specific prompt extensions (see below)
+│   ├── context.txt             # Inventory snapshot (auto-refreshed)
+│   └── sessions/               # Per-user conversation state
+│       └── {user_id}.json
 ├── src/
 │   ├── bot.py              # Telegram handlers and command registration
 │   ├── agent.py            # Gemini agent with function calling and fallback
@@ -54,6 +56,17 @@ Telegram <-> Bot (python-telegram-bot)
 ├── requirements.txt
 └── .env.example
 ```
+
+### System Prompt
+
+The system prompt is assembled from multiple files in `data/`:
+
+- **`prompt.txt`** — Base instructions (seeded from `sample-data/prompt.txt` on first run, updated with new code releases)
+- **`prompt-*.txt`** — Site-specific extensions, sorted by name and appended to the base prompt. These are gitignored and specific to each deployment.
+
+For example, create `data/prompt-hochzoll-126.txt` with your apartment layout, room naming conventions, and furniture prefixes. See `sample-data/prompt-site-example.txt` for a template.
+
+This separation means `prompt.txt` evolves with code (new capabilities, decision logic) while site config stays untouched across updates.
 
 ## Deployment
 

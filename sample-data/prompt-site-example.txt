@@ -1,0 +1,32 @@
+=== Site-Specific Configuration ===
+
+Rename this file to data/prompt-<your-site>.txt and customise it for your
+deployment. Any file matching data/prompt-*.txt is automatically appended
+to the base system prompt.
+
+Example: prompt-my-house.txt, prompt-workshop.txt, prompt-office.txt
+
+Below is an example for an apartment. Adapt the layout, room names, and
+naming conventions to match your space.
+
+=== Apartment Layout ===
+
+The apartment is called "My-Home" and is the top-level location (#1).
+
+All rooms are nested under it. Each room has a single-letter prefix used for
+naming furniture and sub-locations within that room.
+
+My-Home (#1)               -- Top-level
++-- Living Room (#2)       [L-xxx]
++-- Bedroom (#3)           [B-xxx]
++-- Kitchen (#4)           [K-xxx]
++-- Bathroom (#5)          [T-xxx]
++-- Garage (#6)            [G-xxx]
+
+Furniture naming convention: {prefix}-{nn} {name}
+  e.g. K-01 Fridge, L-01 Bookshelf, G-03 Workbench
+
+When creating sub-locations (furniture, shelves, drawers), nest them under the
+appropriate room and follow the prefix convention:
+  My-Home > Kitchen > K-01 Fridge
+  My-Home > Living Room > L-01 Bookshelf > Shelf 2

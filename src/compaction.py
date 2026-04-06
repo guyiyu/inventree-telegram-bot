@@ -42,10 +42,26 @@ def init_data_dir() -> None:
 
 
 def get_prompt() -> str:
-    """Read the system prompt from data/prompt.txt."""
+    """Read the system prompt from data/prompt.txt plus any data/prompt-*.txt files.
+
+    prompt.txt is the base prompt (committed, evolves with code).
+    Any prompt-*.txt files in data/ are site-specific extensions (gitignored,
+    per-deployment). They are sorted by name and appended to the base prompt.
+    Example: prompt-hochzoll-126.txt for apartment-specific layout and naming.
+    """
+    parts = []
     if PROMPT_FILE.exists():
-        return PROMPT_FILE.read_text(encoding="utf-8")
-    return "You are a helpful home inventory assistant."
+        parts.append(PROMPT_FILE.read_text(encoding="utf-8"))
+    else:
+        parts.append("You are a helpful home inventory assistant.")
+
+    for extra in sorted(DATA_DIR.glob("prompt-*.txt")):
+        text = extra.read_text(encoding="utf-8").strip()
+        if text:
+            parts.append(text)
+            logger.debug("Loaded extra prompt: %s", extra.name)
+
+    return "\n\n".join(parts)
 
 
 def get_context() -> str:
