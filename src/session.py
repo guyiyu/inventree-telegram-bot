@@ -10,10 +10,16 @@ Both use the lite model (500 RPD) to generate a summary, preserving pending
 actions and key decisions. Summaries are:
 - Stored separately from messages (not injected as a fake user message)
 - Injected into the system prompt as conversation context
-- Persisted to data/sessions/{user_id}.txt to survive restarts
+
+Session persistence:
+- Full session state (messages + summary) saved to data/sessions/{user_id}.json
+  after every bot response and after compaction.
+- On startup, sessions are restored from disk so conversations survive restarts.
+- Inline image data is stripped from persisted messages to keep files small.
 """
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -47,6 +53,11 @@ Output only the summary, no preamble."""
 def _summary_path(user_id: int) -> Path:
     """Path to the persisted summary file for a user."""
     return SESSIONS_DIR / f"{user_id}.txt"
+
+
+def _session_path(user_id: int) -> Path:
+    """Path to the persisted session file (messages + summary) for a user."""
+    return SESSIONS_DIR / f"{user_id}.json"
 
 
 def _load_summary(user_id: int) -> str:
@@ -102,9 +113,8 @@ class ConversationSession:
     _token_estimate: int = 0
 
     def __post_init__(self):
-        # Load persisted summary from disk if available
-        if not self.summary:
-            self.summary = _load_summary(self.user_id)
+        # Load persisted session from disk if available
+        self._load_from_disk()
 
     @property
     def token_estimate(self) -> int:
@@ -127,10 +137,74 @@ class ConversationSession:
         self.summary = ""
         self._token_estimate = 0
         self.last_activity = time.time()
-        # Remove persisted summary
-        path = _summary_path(self.user_id)
-        if path.exists():
-            path.unlink()
+        # Remove persisted files
+        for path in [_summary_path(self.user_id), _session_path(self.user_id)]:
+            if path.exists():
+                path.unlink()
+
+    def save_to_disk(self) -> None:
+        """Persist the full session (summary + messages) to disk as JSON.
+
+        Inline image data is stripped and replaced with a text placeholder
+        to avoid bloating the session file.
+        """
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+        serialized_messages = []
+        for msg in self.messages:
+            dumped = msg.model_dump(exclude_none=True)
+            # Strip inline_data (images) to keep the file small
+            if "parts" in dumped:
+                for part in dumped["parts"]:
+                    if "inline_data" in part:
+                        del part["inline_data"]
+                        part["text"] = "[sent an image]"
+            serialized_messages.append(dumped)
+
+        data = {
+            "summary": self.summary,
+            "messages": serialized_messages,
+            "last_activity": self.last_activity,
+        }
+        path = _session_path(self.user_id)
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        logger.debug("Session %s saved to disk (%d messages)", self.user_id, len(self.messages))
+
+        # Also keep the plain-text summary file in sync (used during compaction)
+        if self.summary:
+            _save_summary(self.user_id, self.summary)
+
+    def _load_from_disk(self) -> None:
+        """Load session state from disk on startup.
+
+        Tries the JSON session file first (has messages + summary).
+        Falls back to the legacy plain-text summary file.
+        """
+        json_path = _session_path(self.user_id)
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                self.summary = data.get("summary", "")
+                self.last_activity = data.get("last_activity", time.time())
+                for msg_data in data.get("messages", []):
+                    content = types.Content.model_validate(msg_data)
+                    self.messages.append(content)
+                self._recalculate_tokens()
+                logger.info(
+                    "Session %s loaded from disk: %d messages, %d estimated tokens",
+                    self.user_id, len(self.messages), self._token_estimate,
+                )
+                return
+            except Exception:
+                logger.exception("Failed to load session %s from JSON, starting fresh", self.user_id)
+                self.messages.clear()
+                self._token_estimate = 0
+
+        # Fallback: legacy summary-only file
+        txt_path = _summary_path(self.user_id)
+        if txt_path.exists():
+            self.summary = txt_path.read_text(encoding="utf-8")
+            logger.info("Session %s loaded legacy summary from disk", self.user_id)
 
     def needs_hot_compaction(self) -> bool:
         threshold = int(settings.context_budget * settings.hot_compaction_threshold)
@@ -209,6 +283,7 @@ class ConversationSession:
             half = len(self.messages) // 2
             self.messages = self.messages[half:]
             self._recalculate_tokens()
+            self.save_to_disk()
             return
 
         logger.info(
@@ -216,13 +291,14 @@ class ConversationSession:
             self.user_id, len(old_messages), len(summary_text), len(recent_messages),
         )
 
-        # Store summary separately and persist to disk
+        # Store summary and persist full session to disk
         self.summary = summary_text
-        _save_summary(self.user_id, summary_text)
 
         # Keep only recent messages
         self.messages = recent_messages
         self._recalculate_tokens()
+
+        self.save_to_disk()
 
         # Refresh inventory context so the next prompt has fresh data
         await refresh_context()

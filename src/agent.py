@@ -328,6 +328,7 @@ async def chat(user_id: int, user_message: str, image_bytes: bytes | None = None
         if not fn_calls:
             # Final text response — add to session and return
             session.add_message(content)
+            session.save_to_disk()
             text_parts = [part.text for part in content.parts if part.text]
             reply = "\n".join(text_parts) if text_parts else "I couldn't process that request."
             return reply, used_model
@@ -348,4 +349,5 @@ async def chat(user_id: int, user_message: str, image_bytes: bytes | None = None
         fn_results_content = types.Content(role="user", parts=fn_response_parts)
         session.add_message(fn_results_content)
 
+    session.save_to_disk()
     return "I ran into a loop trying to process your request. Please try rephrasing.", used_model
