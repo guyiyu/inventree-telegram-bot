@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 from telegram import BotCommand, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.error import BadRequest
+from telegram.error import BadRequest
 
 from config import settings
 from agent import chat, request_log
@@ -19,6 +21,15 @@ logging.basicConfig(
 # Suppress httpx request logging — it includes the bot token in Telegram API URLs
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+async def _edit_with_html(msg, text: str) -> None:
+    """Edit a message with HTML parsing, falling back to plain text."""
+    try:
+        await msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
+    except BadRequest:
+        logger.warning("HTML parse failed, falling back to plain text")
+        await msg.edit_text(text)
 
 
 def _is_authorized(user_id: int) -> bool:
@@ -104,7 +115,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     try:
         reply, _model = await chat(update.effective_user.id, user_text)
-        await thinking_msg.edit_text(reply)
+        await _edit_with_html(thinking_msg, reply)
     except Exception:
         logger.exception("Error processing message")
         await thinking_msg.edit_text("Sorry, something went wrong. Please try again.")
@@ -124,7 +135,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         image_bytes = await file.download_as_bytearray()
 
         reply, _model = await chat(update.effective_user.id, caption, image_bytes=bytes(image_bytes), mime_type="image/jpeg")
-        await thinking_msg.edit_text(reply)
+        await _edit_with_html(thinking_msg, reply)
     except Exception:
         logger.exception("Error processing photo")
         await thinking_msg.edit_text("Sorry, I couldn't process that photo. Please try again.")
