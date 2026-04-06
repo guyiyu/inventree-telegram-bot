@@ -133,6 +133,24 @@ async def create_category(name: str, description: str = "", parent: int | None =
     return await _post("/part/category/", data=data)
 
 
+# --- Image Upload ---
+
+async def upload_part_image(part_id: int, image_bytes: bytes, filename: str = "photo.jpg", mime_type: str = "image/jpeg") -> dict:
+    """Upload an image as the thumbnail for a Part.
+
+    Uses multipart/form-data PATCH to set the Part's image field.
+    """
+    auth_header = {"Authorization": f"Token {settings.inventree_api_token}"}
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.patch(
+            f"{API_BASE}/part/{part_id}/",
+            headers=auth_header,
+            files={"image": (filename, image_bytes, mime_type)},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 # --- Reporting ---
 
 async def get_inventory_summary() -> dict:

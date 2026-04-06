@@ -111,6 +111,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user_text.strip():
         return
 
+    # If the user replies to a message that has a photo, stash it on the session
+    # so Gemini can attach it to a Part via upload_part_image.
+    image_bytes = None
+    replied = update.message.reply_to_message
+    if replied and replied.photo:
+        try:
+            photo = replied.photo[-1]
+            file = await context.bot.get_file(photo.file_id)
+            raw = await file.download_as_bytearray()
+            image_bytes = bytes(raw)
+            session = get_session(update.effective_user.id)
+            session.pending_image = image_bytes
+            session.pending_image_mime = "image/jpeg"
+            logger.info("Stashed image from replied-to message for user %s", update.effective_user.id)
+        except Exception:
+            logger.warning("Failed to fetch photo from replied-to message", exc_info=True)
+
     thinking_msg = await update.message.reply_text("Thinking...")
 
     try:
@@ -132,9 +149,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         photo = update.message.photo[-1]
         file = await context.bot.get_file(photo.file_id)
-        image_bytes = await file.download_as_bytearray()
+        image_bytes = bytes(await file.download_as_bytearray())
 
-        reply, _model = await chat(update.effective_user.id, caption, image_bytes=bytes(image_bytes), mime_type="image/jpeg")
+        # Stash the image on the session so upload_part_image can use it
+        session = get_session(update.effective_user.id)
+        session.pending_image = image_bytes
+        session.pending_image_mime = "image/jpeg"
+
+        reply, _model = await chat(update.effective_user.id, caption, image_bytes=image_bytes, mime_type="image/jpeg")
         await _edit_with_html(thinking_msg, reply)
     except Exception:
         logger.exception("Error processing photo")

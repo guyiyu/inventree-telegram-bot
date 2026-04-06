@@ -111,6 +111,11 @@ class ConversationSession:
     summary: str = ""
     last_activity: float = field(default_factory=time.time)
     _token_estimate: int = 0
+    # Stashed image from the most recent photo message (not persisted to disk).
+    # Set by bot.py when the user sends a photo or replies to a photo message.
+    # Consumed by agent.py when Gemini calls upload_part_image.
+    pending_image: bytes | None = field(default=None, repr=False)
+    pending_image_mime: str = "image/jpeg"
 
     def __post_init__(self):
         # Load persisted session from disk if available

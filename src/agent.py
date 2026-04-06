@@ -31,6 +31,7 @@ WRITE_FUNCTIONS = {
     "move_stock", "create_location", "create_category",
     "deactivate_part", "delete_part", "delete_stock_item",
     "delete_location", "delete_category",
+    "upload_part_image",
 }
 
 # Define the tools Gemini can call
@@ -235,6 +236,23 @@ TOOLS = [
                     required=["category_id"],
                 ),
             ),
+            types.FunctionDeclaration(
+                name="upload_part_image",
+                description=(
+                    "Upload the user's photo as the thumbnail image for a Part. "
+                    "Uses the most recent photo from this conversation (sent directly "
+                    "or from a replied-to message). Only call this when the user's photo "
+                    "depicts the item the Part represents. Do NOT call this if the photo "
+                    "is of something else (e.g. a shelf, a room, or an unrelated item)."
+                ),
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "part_id": types.Schema(type=types.Type.INTEGER, description="Part ID to attach the image to"),
+                    },
+                    required=["part_id"],
+                ),
+            ),
         ]
     )
 ]
@@ -246,6 +264,13 @@ def _build_system_prompt(user_id: int) -> str:
     parts = [prompt, f"\n--- INVENTORY CONTEXT ---\n{context}"]
 
     session = get_session(user_id)
+    if session.pending_image is not None:
+        parts.append(
+            "\n--- PHOTO AVAILABLE ---\n"
+            "A photo from this conversation is available for upload. "
+            "If you create or update a Part that matches this photo, "
+            "call upload_part_image(part_id) to attach it as the Part's image."
+        )
     if session.summary:
         parts.append(f"\n--- CONVERSATION CONTEXT ---\n{session.summary}")
 
@@ -273,14 +298,35 @@ FUNCTION_MAP: dict[str, Any] = {
 }
 
 
-async def _execute_function_call(fn_call: types.FunctionCall) -> Any:
+async def _execute_function_call(fn_call: types.FunctionCall, user_id: int) -> Any:
     """Execute a function call from Gemini and return the result.
 
     After write operations, refreshes the inventory context snapshot.
+    upload_part_image is handled specially: it pulls the pending image from
+    the user's session rather than receiving bytes via function args.
     """
     fn_name = fn_call.name
     fn_args = dict(fn_call.args) if fn_call.args else {}
     logger.info("Calling %s(%s)", fn_name, fn_args)
+
+    # Special handling for upload_part_image — inject pending image from session
+    if fn_name == "upload_part_image":
+        session = get_session(user_id)
+        if session.pending_image is None:
+            return {"error": "No photo available. The user needs to send or reply to a photo first."}
+        part_id = int(fn_args["part_id"])
+        try:
+            result = await inv.upload_part_image(
+                part_id=part_id,
+                image_bytes=session.pending_image,
+                mime_type=session.pending_image_mime,
+            )
+            session.pending_image = None  # consumed
+            await refresh_context()
+            return result
+        except Exception as e:
+            logger.exception("Error uploading image for part %s", part_id)
+            return {"error": str(e)}
 
     fn = FUNCTION_MAP.get(fn_name)
     if fn is None:
@@ -404,7 +450,7 @@ async def chat(user_id: int, user_message: str, image_bytes: bytes | None = None
 
         fn_response_parts: list[types.Part] = []
         for fn_call in fn_calls:
-            result = await _execute_function_call(fn_call)
+            result = await _execute_function_call(fn_call, user_id)
             fn_response_parts.append(
                 types.Part.from_function_response(
                     name=fn_call.name,

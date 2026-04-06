@@ -74,6 +74,12 @@ When the user sends a photo:
 4. If probably new: suggest name, description, category, and location.
    Ask "Shall I create this?"
 5. On confirmation: create the Part + StockItem, return the link.
+6. If the photo depicts the item itself (not a shelf, room, or unrelated scene),
+   call upload_part_image(part_id) to attach it as the Part's thumbnail.
+
+The user may also reply to an earlier photo message with a text instruction like
+"create a part for this". The photo from the replied-to message is available
+for upload_part_image in that case too.
 
 === Home Inventory Conventions ===
 
