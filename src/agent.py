@@ -29,6 +29,8 @@ request_log: list[dict] = []
 WRITE_FUNCTIONS = {
     "create_part", "create_stock_item", "update_stock_quantity",
     "move_stock", "create_location", "create_category",
+    "deactivate_part", "delete_part", "delete_stock_item",
+    "delete_location", "delete_category",
 }
 
 # Define the tools Gemini can call
@@ -174,6 +176,65 @@ TOOLS = [
                     properties={},
                 ),
             ),
+            types.FunctionDeclaration(
+                name="deactivate_part",
+                description="Deactivate (archive) a part without deleting it. The part remains in the database but is marked inactive.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "part_id": types.Schema(type=types.Type.INTEGER, description="Part ID to deactivate"),
+                    },
+                    required=["part_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="delete_part",
+                description="Permanently delete a part. Automatically deactivates it first if needed. Fails if the part is locked or used in a BOM.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "part_id": types.Schema(type=types.Type.INTEGER, description="Part ID to delete"),
+                    },
+                    required=["part_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="delete_stock_item",
+                description="Permanently delete a stock item (remove a physical stock entry)",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "stock_id": types.Schema(type=types.Type.INTEGER, description="Stock item ID to delete"),
+                    },
+                    required=["stock_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="delete_location",
+                description="Delete a stock location. By default, child locations and stock items are safely re-parented to the parent. Set flags to cascade-delete instead.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "location_id": types.Schema(type=types.Type.INTEGER, description="Location ID to delete"),
+                        "delete_stock_items": types.Schema(type=types.Type.BOOLEAN, description="Also delete all stock items in this location (default: false, re-parents them)"),
+                        "delete_sub_locations": types.Schema(type=types.Type.BOOLEAN, description="Also delete all child locations (default: false, re-parents them)"),
+                    },
+                    required=["location_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="delete_category",
+                description="Delete a part category. By default, child categories and parts are safely re-parented to the parent. Set flags to cascade-delete instead.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "category_id": types.Schema(type=types.Type.INTEGER, description="Category ID to delete"),
+                        "delete_parts": types.Schema(type=types.Type.BOOLEAN, description="Also delete all parts in this category (default: false, re-parents them)"),
+                        "delete_child_categories": types.Schema(type=types.Type.BOOLEAN, description="Also delete all child categories (default: false, re-parents them)"),
+                    },
+                    required=["category_id"],
+                ),
+            ),
         ]
     )
 ]
@@ -204,6 +265,11 @@ FUNCTION_MAP: dict[str, Any] = {
     "create_location": inv.create_location,
     "create_category": inv.create_category,
     "get_inventory_summary": inv.get_inventory_summary,
+    "deactivate_part": inv.deactivate_part,
+    "delete_part": inv.delete_part,
+    "delete_stock_item": inv.delete_stock_item,
+    "delete_location": inv.delete_location,
+    "delete_category": inv.delete_category,
 }
 
 

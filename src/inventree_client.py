@@ -42,6 +42,14 @@ async def _patch(path: str, data: dict | None = None) -> Any:
         return resp.json()
 
 
+async def _delete(path: str, data: dict | None = None) -> bool:
+    """Send a DELETE request. Returns True on success (204 No Content)."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.request("DELETE", f"{API_BASE}{path}", headers=HEADERS, json=data)
+        resp.raise_for_status()
+        return True
+
+
 # --- Search & Query ---
 
 async def search_parts(query: str, limit: int = 20) -> list[dict]:
@@ -139,4 +147,85 @@ async def get_inventory_summary() -> dict:
         "total_stock_items": stock.get("count", 0) if isinstance(stock, dict) else len(stock),
         "total_locations": locations.get("count", 0) if isinstance(locations, dict) else len(locations),
         "total_categories": categories.get("count", 0) if isinstance(categories, dict) else len(categories),
+    }
+
+
+# --- Delete & Deactivate ---
+
+async def deactivate_part(part_id: int) -> dict:
+    """Deactivate (archive) a part by setting active=false."""
+    return await _patch(f"/part/{part_id}/", data={"active": False})
+
+
+async def delete_part(part_id: int) -> dict:
+    """Delete a part. Deactivates it first if it is still active.
+
+    Note: will fail if the part is locked or used in a BOM (unless the
+    InvenTree setting PART_ALLOW_DELETE_FROM_ASSEMBLY is enabled).
+    """
+    # InvenTree requires the part to be inactive before deletion
+    part = await _get(f"/part/{part_id}/")
+    if part.get("active", True):
+        await _patch(f"/part/{part_id}/", data={"active": False})
+    await _delete(f"/part/{part_id}/")
+    return {"deleted": True, "part_id": part_id, "name": part.get("name", "")}
+
+
+async def delete_stock_item(stock_id: int) -> dict:
+    """Delete a stock item."""
+    # Fetch name/part info before deleting for a useful response
+    item = await _get(f"/stock/{stock_id}/")
+    await _delete(f"/stock/{stock_id}/")
+    return {"deleted": True, "stock_id": stock_id, "part": item.get("part"), "quantity": item.get("quantity")}
+
+
+async def delete_location(
+    location_id: int,
+    delete_stock_items: bool = False,
+    delete_sub_locations: bool = False,
+) -> dict:
+    """Delete a stock location.
+
+    By default, child locations and stock items are re-parented to the
+    parent location (safe). Set flags to True to cascade-delete instead.
+    """
+    loc = await _get(f"/stock/location/{location_id}/")
+    data = {}
+    if delete_stock_items:
+        data["delete_stock_items"] = True
+    if delete_sub_locations:
+        data["delete_sub_locations"] = True
+    await _delete(f"/stock/location/{location_id}/", data=data or None)
+    return {
+        "deleted": True,
+        "location_id": location_id,
+        "name": loc.get("name", ""),
+        "stock_items_deleted": delete_stock_items,
+        "sub_locations_deleted": delete_sub_locations,
+    }
+
+
+async def delete_category(
+    category_id: int,
+    delete_parts: bool = False,
+    delete_child_categories: bool = False,
+) -> dict:
+    """Delete a part category.
+
+    By default, child categories and parts are re-parented to the parent
+    category (safe). Set flags to True to cascade-delete instead.
+    """
+    cat = await _get(f"/part/category/{category_id}/")
+    data = {}
+    if delete_parts:
+        data["delete_parts"] = True
+    if delete_child_categories:
+        data["delete_child_categories"] = True
+    await _delete(f"/part/category/{category_id}/", data=data or None)
+    return {
+        "deleted": True,
+        "category_id": category_id,
+        "name": cat.get("name", ""),
+        "parts_deleted": delete_parts,
+        "child_categories_deleted": delete_child_categories,
     }
