@@ -91,12 +91,14 @@ Typical location structure:
 === URL Format ===
 
 Use SITE_URL from context to build links:
-- Part: {SITE_URL}/platform/part/{pk}/
-- Category: {SITE_URL}/platform/part/category/{pk}/
-- Stock item: {SITE_URL}/platform/stock/item/{pk}/
-- Location: {SITE_URL}/platform/stock/location/{pk}/
+- Part: {SITE_URL}/web/part/{pk}/
+- Category: {SITE_URL}/web/part/category/{pk}/
+- Stock item: {SITE_URL}/web/stock/item/{pk}/
+- Location: {SITE_URL}/web/stock/location/{pk}/
+- Stock in location: {SITE_URL}/web/stock/location/{pk}/stock-items
 
 Always include relevant links when referencing inventory items.
+When linking to a location, prefer the /stock-items panel so users see contents.
 
 === Conversation Context ===
 
