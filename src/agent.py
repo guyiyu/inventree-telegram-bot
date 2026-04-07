@@ -32,6 +32,9 @@ WRITE_FUNCTIONS = {
     "deactivate_part", "delete_part", "delete_stock_item",
     "delete_location", "delete_category",
     "upload_part_image",
+    "update_location", "update_part", "update_category", "move_category",
+    "add_stock", "remove_stock", "transfer_stock",
+    "create_parameter_template", "set_parameter", "update_parameter", "delete_parameter",
 }
 
 # Define the tools Gemini can call
@@ -265,6 +268,209 @@ TOOLS = [
                     required=["part_id"],
                 ),
             ),
+            types.FunctionDeclaration(
+                name="get_stock_item",
+                description="Get details of a specific stock item by its ID",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "stock_id": types.Schema(type=types.Type.INTEGER, description="Stock item ID"),
+                    },
+                    required=["stock_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_category",
+                description="Get details of a specific part category by its ID",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "category_id": types.Schema(type=types.Type.INTEGER, description="Category ID"),
+                    },
+                    required=["category_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_location",
+                description="Get details of a specific stock location by its ID",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "location_id": types.Schema(type=types.Type.INTEGER, description="Location ID"),
+                    },
+                    required=["location_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="update_location",
+                description="Update a stock location's name and/or description (rename a room, shelf, etc.)",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "location_id": types.Schema(type=types.Type.INTEGER, description="Location ID to update"),
+                        "name": types.Schema(type=types.Type.STRING, description="New name for the location"),
+                        "description": types.Schema(type=types.Type.STRING, description="New description for the location"),
+                    },
+                    required=["location_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="update_part",
+                description="Update a part's name, description, category, or keywords",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "part_id": types.Schema(type=types.Type.INTEGER, description="Part ID to update"),
+                        "name": types.Schema(type=types.Type.STRING, description="New name"),
+                        "description": types.Schema(type=types.Type.STRING, description="New description"),
+                        "category_id": types.Schema(type=types.Type.INTEGER, description="New category ID"),
+                        "keywords": types.Schema(type=types.Type.STRING, description="New keywords (comma-separated)"),
+                    },
+                    required=["part_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="update_category",
+                description="Update a part category's name and/or description",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "category_id": types.Schema(type=types.Type.INTEGER, description="Category ID to update"),
+                        "name": types.Schema(type=types.Type.STRING, description="New name"),
+                        "description": types.Schema(type=types.Type.STRING, description="New description"),
+                    },
+                    required=["category_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="move_category",
+                description="Move a part category to a new parent (re-parent). All child categories and parts stay nested under it.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "category_id": types.Schema(type=types.Type.INTEGER, description="Category ID to move"),
+                        "parent": types.Schema(type=types.Type.INTEGER, description="New parent category ID"),
+                    },
+                    required=["category_id", "parent"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="add_stock",
+                description="Add quantity to an existing stock item with proper tracking history. Use this when the user receives more of an item or corrects a count upward.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "stock_id": types.Schema(type=types.Type.INTEGER, description="Stock item ID"),
+                        "quantity": types.Schema(type=types.Type.NUMBER, description="Quantity to add"),
+                        "notes": types.Schema(type=types.Type.STRING, description="Reason for the adjustment"),
+                    },
+                    required=["stock_id", "quantity"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="remove_stock",
+                description="Remove quantity from an existing stock item with proper tracking history. Use this when items are consumed, used up, or the count needs correcting downward.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "stock_id": types.Schema(type=types.Type.INTEGER, description="Stock item ID"),
+                        "quantity": types.Schema(type=types.Type.NUMBER, description="Quantity to remove"),
+                        "notes": types.Schema(type=types.Type.STRING, description="Reason for the removal"),
+                    },
+                    required=["stock_id", "quantity"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="transfer_stock",
+                description="Transfer a quantity of stock from its current location to a different location. If transferring less than the full quantity, InvenTree splits the stock item automatically. Creates tracking history.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "stock_id": types.Schema(type=types.Type.INTEGER, description="Stock item ID to transfer from"),
+                        "quantity": types.Schema(type=types.Type.NUMBER, description="Quantity to transfer"),
+                        "location_id": types.Schema(type=types.Type.INTEGER, description="Destination location ID"),
+                        "notes": types.Schema(type=types.Type.STRING, description="Reason for the transfer"),
+                    },
+                    required=["stock_id", "quantity", "location_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="list_parameter_templates",
+                description="List all available parameter templates — the types of attributes that can be tracked on parts or locations (e.g. Weight, Dimensions, Purchase Price, Warranty Expiry).",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "limit": types.Schema(type=types.Type.INTEGER, description="Max results (default 100)"),
+                    },
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="create_parameter_template",
+                description="Create a new parameter template — define a new type of attribute that can be tracked (e.g. 'Purchase Price' with units 'EUR', or 'Warranty Expiry' with no units).",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "name": types.Schema(type=types.Type.STRING, description="Parameter name (e.g. 'Weight', 'Purchase Price')"),
+                        "units": types.Schema(type=types.Type.STRING, description="Physical units (e.g. 'kg', 'EUR', 'mm'). Empty for unitless."),
+                        "description": types.Schema(type=types.Type.STRING, description="Human-readable description"),
+                        "checkbox": types.Schema(type=types.Type.BOOLEAN, description="If true, parameter is a boolean checkbox"),
+                        "choices": types.Schema(type=types.Type.STRING, description="Comma-separated valid choices (e.g. 'Small,Medium,Large')"),
+                    },
+                    required=["name"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="list_parameters",
+                description="List parameter values (specs/attributes) for a specific part or location. Returns things like weight, dimensions, purchase price, etc.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "part_id": types.Schema(type=types.Type.INTEGER, description="Part ID to get parameters for"),
+                        "location_id": types.Schema(type=types.Type.INTEGER, description="Location ID to get parameters for (use part_id OR location_id, not both)"),
+                        "template_id": types.Schema(type=types.Type.INTEGER, description="Filter by parameter template ID"),
+                        "limit": types.Schema(type=types.Type.INTEGER, description="Max results (default 100)"),
+                    },
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="set_parameter",
+                description="Set a parameter value on a part or location. Requires a template_id (use list_parameter_templates to find or create_parameter_template to make one). The value is always a string.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "template_id": types.Schema(type=types.Type.INTEGER, description="Parameter template ID (what attribute)"),
+                        "data_value": types.Schema(type=types.Type.STRING, description="The value to set (as string, e.g. '2.5', '2025-12-31', 'Large')"),
+                        "part_id": types.Schema(type=types.Type.INTEGER, description="Part ID to set parameter on (use part_id OR location_id)"),
+                        "location_id": types.Schema(type=types.Type.INTEGER, description="Location ID to set parameter on"),
+                        "note": types.Schema(type=types.Type.STRING, description="Optional note about this value"),
+                    },
+                    required=["template_id", "data_value"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="update_parameter",
+                description="Update an existing parameter value by its parameter ID (not template ID). Use list_parameters to find the parameter ID first.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "parameter_id": types.Schema(type=types.Type.INTEGER, description="Parameter instance ID to update"),
+                        "data_value": types.Schema(type=types.Type.STRING, description="New value"),
+                        "note": types.Schema(type=types.Type.STRING, description="Updated note"),
+                    },
+                    required=["parameter_id"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="delete_parameter",
+                description="Delete a parameter value from a part or location by its parameter ID.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "parameter_id": types.Schema(type=types.Type.INTEGER, description="Parameter instance ID to delete"),
+                    },
+                    required=["parameter_id"],
+                ),
+            ),
         ]
     )
 ]
@@ -292,6 +498,9 @@ def _build_system_prompt(user_id: int) -> str:
 FUNCTION_MAP: dict[str, Any] = {
     "search_parts": inv.search_parts,
     "get_part": inv.get_part,
+    "get_stock_item": inv.get_stock_item,
+    "get_category": inv.get_category,
+    "get_location": inv.get_location,
     "list_stock": inv.list_stock,
     "list_locations": inv.list_locations,
     "list_categories": inv.list_categories,
@@ -300,6 +509,13 @@ FUNCTION_MAP: dict[str, Any] = {
     "update_stock_quantity": inv.update_stock_quantity,
     "move_stock": inv.move_stock,
     "move_location": inv.move_location,
+    "update_location": inv.update_location,
+    "update_part": inv.update_part,
+    "update_category": inv.update_category,
+    "move_category": inv.move_category,
+    "add_stock": inv.add_stock,
+    "remove_stock": inv.remove_stock,
+    "transfer_stock": inv.transfer_stock,
     "create_location": inv.create_location,
     "create_category": inv.create_category,
     "get_inventory_summary": inv.get_inventory_summary,
@@ -308,6 +524,12 @@ FUNCTION_MAP: dict[str, Any] = {
     "delete_stock_item": inv.delete_stock_item,
     "delete_location": inv.delete_location,
     "delete_category": inv.delete_category,
+    "list_parameter_templates": inv.list_parameter_templates,
+    "create_parameter_template": inv.create_parameter_template,
+    "list_parameters": inv.list_parameters,
+    "set_parameter": inv.set_parameter,
+    "update_parameter": inv.update_parameter,
+    "delete_parameter": inv.delete_parameter,
 }
 
 

@@ -62,6 +62,11 @@ async def get_part(part_id: int) -> dict:
     return await _get(f"/part/{part_id}/")
 
 
+async def get_stock_item(stock_id: int) -> dict:
+    """Get a single stock item by ID."""
+    return await _get(f"/stock/{stock_id}/")
+
+
 async def list_stock(part_id: int | None = None, location_id: int | None = None, limit: int = 50) -> list[dict]:
     """List stock items, optionally filtered by part or location."""
     params: dict[str, Any] = {"limit": limit}
@@ -91,6 +96,11 @@ async def list_categories(parent: int | None = None) -> list[dict]:
     if parent is not None:
         params["parent"] = parent
     return await _get("/part/category/", params=params)
+
+
+async def get_category(category_id: int) -> dict:
+    """Get a single category by ID."""
+    return await _get(f"/part/category/{category_id}/")
 
 
 # --- Create & Update ---
@@ -125,6 +135,93 @@ async def move_location(location_id: int, parent: int) -> dict:
     return await _patch(f"/stock/location/{location_id}/", data={"parent": parent})
 
 
+async def update_location(location_id: int, name: str | None = None, description: str | None = None) -> dict:
+    """Update a location's name and/or description."""
+    data: dict[str, Any] = {}
+    if name is not None:
+        data["name"] = name
+    if description is not None:
+        data["description"] = description
+    if not data:
+        return {"error": "No fields to update"}
+    return await _patch(f"/stock/location/{location_id}/", data=data)
+
+
+async def update_part(part_id: int, name: str | None = None, description: str | None = None,
+                      category_id: int | None = None, keywords: str | None = None) -> dict:
+    """Update a part's name, description, category, or keywords."""
+    data: dict[str, Any] = {}
+    if name is not None:
+        data["name"] = name
+    if description is not None:
+        data["description"] = description
+    if category_id is not None:
+        data["category"] = category_id
+    if keywords is not None:
+        data["keywords"] = keywords
+    if not data:
+        return {"error": "No fields to update"}
+    return await _patch(f"/part/{part_id}/", data=data)
+
+
+async def update_category(category_id: int, name: str | None = None, description: str | None = None) -> dict:
+    """Update a category's name and/or description."""
+    data: dict[str, Any] = {}
+    if name is not None:
+        data["name"] = name
+    if description is not None:
+        data["description"] = description
+    if not data:
+        return {"error": "No fields to update"}
+    return await _patch(f"/part/category/{category_id}/", data=data)
+
+
+async def move_category(category_id: int, parent: int) -> dict:
+    """Move a category to a new parent (re-parent).
+
+    All child categories and parts stay nested under it.
+    """
+    return await _patch(f"/part/category/{category_id}/", data={"parent": parent})
+
+
+async def add_stock(stock_id: int, quantity: float, notes: str = "") -> dict:
+    """Add quantity to an existing stock item with tracking history.
+
+    Uses the proper /api/stock/add/ endpoint which creates a stock tracking entry.
+    """
+    data: dict[str, Any] = {"items": [{"pk": stock_id, "quantity": quantity}]}
+    if notes:
+        data["notes"] = notes
+    return await _post("/stock/add/", data=data)
+
+
+async def remove_stock(stock_id: int, quantity: float, notes: str = "") -> dict:
+    """Remove quantity from an existing stock item with tracking history.
+
+    Uses the proper /api/stock/remove/ endpoint which creates a stock tracking entry.
+    """
+    data: dict[str, Any] = {"items": [{"pk": stock_id, "quantity": quantity}]}
+    if notes:
+        data["notes"] = notes
+    return await _post("/stock/remove/", data=data)
+
+
+async def transfer_stock(stock_id: int, quantity: float, location_id: int, notes: str = "") -> dict:
+    """Transfer (split & move) a quantity of stock to a different location.
+
+    If the transfer quantity equals the full stock item quantity, the item is
+    simply moved. If less, InvenTree splits the stock item and moves the
+    requested quantity to the new location. Creates tracking history.
+    """
+    data: dict[str, Any] = {
+        "items": [{"pk": stock_id, "quantity": quantity}],
+        "location": location_id,
+    }
+    if notes:
+        data["notes"] = notes
+    return await _post("/stock/transfer/", data=data)
+
+
 async def create_location(name: str, description: str = "", parent: int | None = None) -> dict:
     """Create a new stock location."""
     data: dict[str, Any] = {"name": name, "description": description}
@@ -139,6 +236,102 @@ async def create_category(name: str, description: str = "", parent: int | None =
     if parent is not None:
         data["parent"] = parent
     return await _post("/part/category/", data=data)
+
+
+# --- Parameters ---
+# Parameters attach structured key-value attributes (weight, dimensions, price,
+# expiry date, etc.) to Parts or Stock Locations via a template system.
+# model_type is "part.part" for parts or "stock.stocklocation" for locations.
+
+async def list_parameter_templates(limit: int = 100) -> Any:
+    """List all available parameter templates (what attributes can be tracked)."""
+    return await _get("/parameter/template/", params={"limit": limit})
+
+
+async def create_parameter_template(name: str, units: str = "", description: str = "",
+                                     checkbox: bool = False, choices: str = "") -> dict:
+    """Create a new parameter template (define a new trackable attribute).
+
+    Args:
+        name: Parameter name (e.g. "Weight", "Purchase Price", "Warranty Expiry")
+        units: Physical units (e.g. "kg", "EUR", "mm")
+        description: Human-readable description
+        checkbox: If True, this parameter is a boolean checkbox
+        choices: Comma-separated valid choices (e.g. "Small,Medium,Large")
+    """
+    data: dict[str, Any] = {"name": name}
+    if units:
+        data["units"] = units
+    if description:
+        data["description"] = description
+    if checkbox:
+        data["checkbox"] = True
+    if choices:
+        data["choices"] = choices
+    return await _post("/parameter/template/", data=data)
+
+
+async def list_parameters(part_id: int | None = None, location_id: int | None = None,
+                           template_id: int | None = None, limit: int = 100) -> Any:
+    """List parameter values, optionally filtered by part, location, or template.
+
+    Exactly one of part_id or location_id should be provided to get parameters
+    for a specific object. template_id can narrow by parameter type.
+    """
+    params: dict[str, Any] = {"limit": limit}
+    if part_id is not None:
+        params["model_type"] = "part.part"
+        params["model_id"] = part_id
+    elif location_id is not None:
+        params["model_type"] = "stock.stocklocation"
+        params["model_id"] = location_id
+    if template_id is not None:
+        params["template"] = template_id
+    return await _get("/parameter/", params=params)
+
+
+async def set_parameter(template_id: int, data_value: str,
+                         part_id: int | None = None, location_id: int | None = None,
+                         note: str = "") -> dict:
+    """Set a parameter value on a part or location.
+
+    Args:
+        template_id: Which parameter template to use
+        data_value: The value to set (always a string; InvenTree parses units)
+        part_id: Part ID to attach to (mutually exclusive with location_id)
+        location_id: Location ID to attach to (mutually exclusive with part_id)
+        note: Optional note about this parameter value
+    """
+    data: dict[str, Any] = {"template": template_id, "data": data_value}
+    if part_id is not None:
+        data["model_type"] = "part.part"
+        data["model_id"] = part_id
+    elif location_id is not None:
+        data["model_type"] = "stock.stocklocation"
+        data["model_id"] = location_id
+    else:
+        return {"error": "Either part_id or location_id must be provided"}
+    if note:
+        data["note"] = note
+    return await _post("/parameter/", data=data)
+
+
+async def update_parameter(parameter_id: int, data_value: str | None = None,
+                            note: str | None = None) -> dict:
+    """Update an existing parameter value."""
+    data: dict[str, Any] = {}
+    if data_value is not None:
+        data["data"] = data_value
+    if note is not None:
+        data["note"] = note
+    if not data:
+        return {"error": "No fields to update"}
+    return await _patch(f"/parameter/{parameter_id}/", data=data)
+
+
+async def delete_parameter(parameter_id: int) -> bool:
+    """Delete a parameter value."""
+    return await _delete(f"/parameter/{parameter_id}/")
 
 
 # --- Image Upload ---
