@@ -28,7 +28,7 @@ request_log: list[dict] = []
 # Functions that modify inventory state — context should be refreshed after these
 WRITE_FUNCTIONS = {
     "create_part", "create_stock_item", "update_stock_quantity",
-    "move_stock", "create_location", "create_category",
+    "move_stock", "move_location", "create_location", "create_category",
     "deactivate_part", "delete_part", "delete_stock_item",
     "delete_location", "delete_category",
     "upload_part_image",
@@ -154,6 +154,18 @@ TOOLS = [
                         "parent": types.Schema(type=types.Type.INTEGER, description="Parent location ID"),
                     },
                     required=["name"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="move_location",
+                description="Move a location to a new parent (re-parent). All child locations and stock items inside it move automatically. Use this instead of creating a new location when relocating furniture or portable containers.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "location_id": types.Schema(type=types.Type.INTEGER, description="Location ID to move"),
+                        "parent": types.Schema(type=types.Type.INTEGER, description="New parent location ID"),
+                    },
+                    required=["location_id", "parent"],
                 ),
             ),
             types.FunctionDeclaration(
@@ -287,6 +299,7 @@ FUNCTION_MAP: dict[str, Any] = {
     "create_stock_item": inv.create_stock_item,
     "update_stock_quantity": inv.update_stock_quantity,
     "move_stock": inv.move_stock,
+    "move_location": inv.move_location,
     "create_location": inv.create_location,
     "create_category": inv.create_category,
     "get_inventory_summary": inv.get_inventory_summary,

@@ -117,6 +117,14 @@ async def move_stock(stock_id: int, location_id: int) -> dict:
     return await _patch(f"/stock/{stock_id}/", data={"location": location_id})
 
 
+async def move_location(location_id: int, parent: int) -> dict:
+    """Move a location to a new parent (re-parent).
+
+    All child locations and stock items move with it automatically.
+    """
+    return await _patch(f"/stock/location/{location_id}/", data={"parent": parent})
+
+
 async def create_location(name: str, description: str = "", parent: int | None = None) -> dict:
     """Create a new stock location."""
     data: dict[str, Any] = {"name": name, "description": description}
