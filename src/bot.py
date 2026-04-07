@@ -133,9 +133,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         reply, _model = await chat(update.effective_user.id, user_text)
         await _edit_with_html(thinking_msg, reply)
-    except Exception:
+    except Exception as exc:
         logger.exception("Error processing message")
-        await thinking_msg.edit_text("Sorry, something went wrong. Please try again.")
+        if "503" in str(exc) or "UNAVAILABLE" in str(exc) or "429" in str(exc):
+            await thinking_msg.edit_text("Gemini is temporarily overloaded. Please try again in a minute or two.")
+        else:
+            await thinking_msg.edit_text("Sorry, something went wrong. Please try again.")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -158,9 +161,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         reply, _model = await chat(update.effective_user.id, caption, image_bytes=image_bytes, mime_type="image/jpeg")
         await _edit_with_html(thinking_msg, reply)
-    except Exception:
+    except Exception as exc:
         logger.exception("Error processing photo")
-        await thinking_msg.edit_text("Sorry, I couldn't process that photo. Please try again.")
+        if "503" in str(exc) or "UNAVAILABLE" in str(exc) or "429" in str(exc):
+            await thinking_msg.edit_text("Gemini is temporarily overloaded. Please try again in a minute or two.")
+        else:
+            await thinking_msg.edit_text("Sorry, I couldn't process that photo. Please try again.")
 
 
 async def post_init(application: Application) -> None:

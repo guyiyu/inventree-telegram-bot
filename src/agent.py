@@ -11,7 +11,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types
-from google.genai.errors import ClientError
+from google.genai.errors import ClientError, ServerError
 
 from config import settings
 from compaction import get_context, get_prompt, refresh_context
@@ -583,7 +583,7 @@ async def _generate_with_fallback(
     user_id: int,
     preferred_model: str | None = None,
 ) -> tuple[types.GenerateContentResponse, str]:
-    """Try each model in the fallback list. On 429, wait briefly then try next.
+    """Try each model in the fallback list. On 429/503, wait briefly then try next.
     If preferred_model is set (mid-conversation), try it first with a retry.
     Returns (response, model_name)."""
     # If we're mid-conversation, prioritize the model we started with
@@ -594,7 +594,7 @@ async def _generate_with_fallback(
 
     last_error = None
     for model in order:
-        # Try up to 2 attempts per model (with a wait on 429)
+        # Try up to 2 attempts per model (with a wait on 429/503)
         for attempt in range(2):
             try:
                 response = client.models.generate_content(
@@ -622,6 +622,14 @@ async def _generate_with_fallback(
                         logger.warning("Rate limited on %s again, trying next model...", model)
                     continue
                 raise
+            except ServerError as e:
+                last_error = e
+                if attempt == 0:
+                    logger.warning("Server error (%s) on %s, waiting 10s before retry...", e.status_code, model)
+                    await asyncio.sleep(10)
+                else:
+                    logger.warning("Server error (%s) on %s again, trying next model...", e.status_code, model)
+                continue
     raise last_error
 
 
