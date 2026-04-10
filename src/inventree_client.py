@@ -21,24 +21,44 @@ HEADERS = {
 }
 
 
+def _raise_for_status(resp: httpx.Response) -> None:
+    """Like resp.raise_for_status() but includes the response body in the exception message.
+
+    InvenTree returns field-level validation errors as JSON on 400 responses
+    (e.g. {"name": ["This field must be unique."]}). Without the body the model
+    only sees "400 Bad Request" and retries with the same bad arguments, exhausting
+    all function-call rounds and producing the "I ran into a loop" error.
+    """
+    if resp.is_error:
+        try:
+            body = resp.json()
+        except Exception:
+            body = resp.text
+        raise httpx.HTTPStatusError(
+            f"{resp.status_code} {resp.reason_phrase}: {body}",
+            request=resp.request,
+            response=resp,
+        )
+
+
 async def _get(path: str, params: dict | None = None) -> Any:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(f"{API_BASE}{path}", headers=HEADERS, params=params)
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
 
 async def _post(path: str, data: dict | None = None) -> Any:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(f"{API_BASE}{path}", headers=HEADERS, json=data)
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
 
 async def _patch(path: str, data: dict | None = None) -> Any:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.patch(f"{API_BASE}{path}", headers=HEADERS, json=data)
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
 
@@ -46,7 +66,7 @@ async def _delete(path: str, data: dict | None = None) -> bool:
     """Send a DELETE request. Returns True on success (204 No Content)."""
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.request("DELETE", f"{API_BASE}{path}", headers=HEADERS, json=data)
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return True
 
 
