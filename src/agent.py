@@ -613,7 +613,7 @@ async def _generate_with_fallback(
                 })
                 return response, model
             except ClientError as e:
-                if e.status_code == 429:
+                if e.code == 429:
                     last_error = e
                     if attempt == 0:
                         logger.warning("Rate limited on %s, waiting 15s before retry...", model)
@@ -625,10 +625,10 @@ async def _generate_with_fallback(
             except ServerError as e:
                 last_error = e
                 if attempt == 0:
-                    logger.warning("Server error (%s) on %s, waiting 10s before retry...", e.status_code, model)
+                    logger.warning("Server error (%s) on %s, waiting 10s before retry...", e.code, model)
                     await asyncio.sleep(10)
                 else:
-                    logger.warning("Server error (%s) on %s again, trying next model...", e.status_code, model)
+                    logger.warning("Server error (%s) on %s again, trying next model...", e.code, model)
                 continue
     raise last_error
 
@@ -669,10 +669,24 @@ async def chat(user_id: int, user_message: str, image_bytes: bytes | None = None
     # Loop: send to Gemini, execute any function calls, feed results back
     max_rounds = 5
     for round_num in range(max_rounds):
-        response, used_model = await _generate_with_fallback(
-            models, session.messages, user_id,
-            preferred_model=used_model if round_num > 0 else None,
-        )
+        try:
+            response, used_model = await _generate_with_fallback(
+                models, session.messages, user_id,
+                preferred_model=used_model if round_num > 0 else None,
+            )
+        except ClientError as e:
+            # INVALID_ARGUMENT with "function response turn" means the persisted
+            # session has an orphaned function-call message (no matching response),
+            # which happens when the bot crashes mid-request. Clear history and retry.
+            if e.code == 400 and "function response turn" in str(e).lower():
+                logger.warning(
+                    "Session %s has corrupt history (orphaned function call). "
+                    "Clearing and retrying.", user_id
+                )
+                session.clear()
+                session.add_message(user_content)
+                continue
+            raise
 
         candidate = response.candidates[0]
         content = candidate.content

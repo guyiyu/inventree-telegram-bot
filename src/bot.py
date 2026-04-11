@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from telegram import BotCommand, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.error import BadRequest
-from telegram.error import BadRequest
 
 from config import settings
 from agent import chat, request_log
